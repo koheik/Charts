@@ -272,6 +272,23 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
         drawDescription(context: context)
         
         drawMarkers(context: context)
+        
+        // KK
+        if (self.selectionRightX > self.selectionLeftX) {
+            let h = _viewPortHandler.contentHeight
+            let w = _viewPortHandler.contentWidth
+            let s = _viewPortHandler.scaleX
+            let t = _viewPortHandler.transX
+            let x = s * w * self.selectionLeftX + t + _viewPortHandler.offsetLeft
+            let y = _viewPortHandler.offsetTop
+            let rect = CGRect(x: x,
+                              y: y,
+                              width: s * w * (self.selectionRightX - self.selectionLeftX),
+                              height: h)
+            context.setFillColor(gray: 0.5, alpha: 0.5)
+            context.fill(rect)
+        }
+        //KK
     }
     
     fileprivate var _autoScaleLastLowestVisibleX: Double?
@@ -664,8 +681,74 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
     }
     #endif
     
+    fileprivate var dragStartX : CGFloat = 0.0
+    open var isSelecting = false
+    open var selectionLeftX : CGFloat = 0.0
+    open var selectionRightX : CGFloat = 0.0
+
     @objc fileprivate func panGestureRecognized(_ recognizer: NSUIPanGestureRecognizer)
     {
+        #if os(OSX) // KK
+        if (NSEvent.modifierFlags().contains(.control)) {
+            let location = recognizer.location(in: self)
+            let locationX = location.x - _viewPortHandler.offsetLeft
+            let scaleX = _viewPortHandler.scaleX
+            let transX = _viewPortHandler.transX
+            let contentWidth = _viewPortHandler.contentWidth
+            if recognizer.state == NSUIGestureRecognizerState.began && recognizer.nsuiNumberOfTouches() > 0 {
+                self.isSelecting = true
+                let x = (locationX - transX) / scaleX / contentWidth
+                self.selectionLeftX = x
+                self.selectionRightX = x
+            } else if recognizer.state == NSUIGestureRecognizerState.changed {
+                let x = (locationX - transX) / scaleX / contentWidth
+                self.selectionRightX = x
+                let matrix = _viewPortHandler.touchMatrix
+                let _ = _viewPortHandler.refresh(newMatrix: matrix, chart: self, invalidate: true)
+            } else if recognizer.state == NSUIGestureRecognizerState.ended || recognizer.state == NSUIGestureRecognizerState.cancelled {
+                self.isSelecting = false
+                let x = (locationX - transX) / scaleX / contentWidth
+                self.selectionRightX = x
+                NSLog("selectionLeftX \(self.selectionLeftX)")
+                NSLog("selectionRightX \(self.selectionRightX)")
+                NSLog("contentWidth \(contentWidth)")
+                let matrix = _viewPortHandler.touchMatrix
+                let _ = _viewPortHandler.refresh(newMatrix: matrix, chart: self, invalidate: true)
+            }
+            return
+        }
+        if (NSEvent.modifierFlags().contains(.command)) {
+            let location = recognizer.location(in: self)
+            let translation = recognizer.translation(in: self)
+            let x = location.x
+            let y = location.y
+            let dx = translation.x
+            let dy = translation.y
+            let w = _viewPortHandler.contentWidth;
+            if recognizer.state == NSUIGestureRecognizerState.began && recognizer.nsuiNumberOfTouches() > 0 {
+                self.dragStartX = x
+                NSLog("selection began at\n(\(x), \(y)) (\(dx), \(dy))")
+            } else if recognizer.state == NSUIGestureRecognizerState.changed {
+                NSLog("selection changed at\n(\(x), \(y)) (\(dx), \(dy))")
+            } else if recognizer.state == NSUIGestureRecognizerState.ended || recognizer.state == NSUIGestureRecognizerState.cancelled {
+                NSLog("selection ended at\n(\(x), \(y)) (\(dx), \(dy))")
+                let selectWidth = abs(self.dragStartX - x)
+                if (selectWidth > 1) {
+                    let scaleX : CGFloat = w / selectWidth
+                    let center = _viewPortHandler.contentCenter
+                    NSLog("centerX \(center.x)")
+                    let zoomCenterX = (x + self.dragStartX) / 2.0 - _viewPortHandler.offsetLeft
+                    NSLog("zoomCenterX \(zoomCenterX)")
+                    var matrix = CGAffineTransform(translationX: center.x - _viewPortHandler.offsetLeft, y: 0.0)
+                    matrix = matrix.scaledBy(x: scaleX, y: 1.0)
+                    matrix = matrix.translatedBy(x: -zoomCenterX, y: 0.0)
+                    matrix = _viewPortHandler.touchMatrix.concatenating(matrix)
+                    let _ = _viewPortHandler.refresh(newMatrix: matrix, chart: self, invalidate: true)
+                }
+            }
+            return
+        }
+        #endif // KK
         if recognizer.state == NSUIGestureRecognizerState.began && recognizer.nsuiNumberOfTouches() > 0
         {
             stopDeceleration()
@@ -956,7 +1039,31 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
         
         return false
     }
-    
+    #if os(OSX) // KK
+    override open func scrollWheel(with event: NSEvent) {
+        let location = event.locationInWindow
+//        let cx = location.x - _viewPortHandler.offsetLeft
+        let local = self.convert(location, to: self)
+        let zoomCenterX = local.x - _viewPortHandler.offsetLeft
+        var scaleX : CGFloat = 1.0
+        if (event.scrollingDeltaY < -1.0) {
+            scaleX = 0.84
+        }
+        if (event.scrollingDeltaY > 1.0) {
+            scaleX = 1.19
+        }
+        var matrix = CGAffineTransform(translationX: zoomCenterX, y: 0.0)
+        matrix = matrix.scaledBy(x: scaleX, y: 1.0)
+        matrix = matrix.translatedBy(x: -zoomCenterX, y: 0.0)
+        matrix = _viewPortHandler.touchMatrix.concatenating(matrix)
+        let _ = _viewPortHandler.refresh(newMatrix: matrix, chart: self, invalidate: true)
+    }
+    override open func mouseDown(with event: NSEvent) {
+        NSLog("mouse down")
+        NSLog(event.modifierFlags.contains(.command).description)
+        NSLog(NSEvent.modifierFlags().contains(.command).description)
+    }
+    #endif // KK    
     /// MARK: Viewport modifiers
     
     /// Zooms in by 1.4, into the charts center.
